@@ -1,7 +1,8 @@
 -- Active: 1711808273609@@127.0.0.1@3306@blinkit
 
 CREATE DATABASE Blinkit;
-USE Blinkit;
+
+
 CREATE TABLE admin
 (
 	admin_id INT PRIMARY KEY NOT NULL,
@@ -51,24 +52,26 @@ CREATE TABLE IF NOT EXISTS Products (
 );
 
 
+
+CREATE TABLE IF NOT EXISTS  orders (
+    order_id INT auto_increment PRIMARY KEY,
+    user_id INT,
+    status ENUM('cart', 'on the way', 'delivered'),
+    total_amount DECIMAL(10, 2),
+    FOREIGN KEY (user_id) REFERENCES customer(user_id)
+   
+);
+
 CREATE TABLE IF NOT EXISTS PLACES(
-	places_id INT AUTO_INCREMENT PRIMARY KEY,
+	order_id INT ,
     quantity INT NOT NULL,
     product_id INT NOT NULL,
-    foreign key(product_id) references Products(product_id)
+    foreign key(product_id) references Products(product_id),
+    foreign key(order_id) references orders(order_id)
     
 );
 
 
-CREATE TABLE IF NOT EXISTS  orders (
-    order_id INT PRIMARY KEY,
-    user_id INT,
-    status ENUM('cart', 'on the way', 'delivered'),
-    places_id INT,
-    total_amount DECIMAL(10, 2),
-    FOREIGN KEY (user_id) REFERENCES customer(user_id),
-    FOREIGN KEY (places_id) REFERENCES PLACES(places_id)
-);
 
 CREATE TABLE IF NOT EXISTS  payment (
     transaction_id INT auto_increment PRIMARY KEY,
@@ -104,7 +107,7 @@ CREATE TABLE IF NOT EXISTS  delivery (
 -- Populating data for customer table
 INSERT INTO customer (phone_number, password, first_name, last_name, flat_no, city, state, zip_code)
 VALUES 
-('1234567890', 'password1', 'John', 'Doe', 'Apt 101', 'New York', 'NY', '10001'),
+('12345678901', 'password1', 'John', 'Doe', 'Apt 101', 'New York', 'NY', '10001'),
 ('9876543210', 'password2', 'Jane', 'Smith', 'Apt 202', 'Los Angeles', 'CA', '90001'),
 ('1112223333', 'password3', 'Michael', 'Johnson', 'Apt 303', 'Chicago', 'IL', '60601'),
 ('4445556666', 'password4', 'Emily', 'Williams', 'Apt 404', 'Houston', 'TX', '77001'),
@@ -144,47 +147,7 @@ VALUES
 (12, 'Rice Cooker', 13, 'Electronics', 'Kitchen Appliances', 'Multi-functional rice cooker', 80);
 
 
--- Populating data for PLACES table
-INSERT INTO PLACES (quantity, product_id)
-VALUES 
-(10, 1),
-(20, 2),
-(30, 3),
-(15, 4),
-(25, 5),
-(12, 6),
-(18, 7),
-(22, 8),
-(16, 9),
-(8, 10);
 
--- Populating data for orders table
-INSERT INTO orders (order_id, user_id, status, places_id, total_amount)
-VALUES 
-(1, 1, 'cart', 1, 499.99),
-(2, 2, 'on the way', 2, 999.99),
-(3, 3, 'delivered', 3, 149.99),
-(4, 4, 'delivered', 4, 199.99),
-(5, 5, 'cart', 5, 299.99),
-(6, 6, 'on the way', 6, 79.99),
-(7, 7, 'delivered', 7, 599.99),
-(8, 8, 'delivered', 8, 399.99),
-(9, 9, 'cart', 9, 129.99),
-(10, 10, 'on the way', 10, 79.99);
-
--- Populating data for payment table
-INSERT INTO payment (user_id, payment_method, total_amount, date_of_payment, order_id)
-VALUES 
-(1, 'cash', 100, '2024-03-06 10:00:00', 1),
-(2, 'online', 120, '2024-03-06 11:00:00', 2),
-(3, 'cash', 190, '2024-03-06 12:00:00', 3),
-(4, 'online', 210, '2024-03-06 13:00:00', 4),
-(5, 'cash', 310, '2024-03-06 14:00:00', 5),
-(6, 'online', 412, '2024-03-06 15:00:00', 6),
-(7, 'cash', 800, '2024-03-06 16:00:00', 7),
-(8, 'online', 200, '2024-03-06 17:00:00', 8),
-(9, 'cash', 1000, '2024-03-06 18:00:00', 9),
-(10, 'online', 1500, '2024-03-06 19:00:00', 10);
 
 
 -- Populating data for delivery_worker table
@@ -335,3 +298,99 @@ VALUES
 
 
 
+-- Trigger : Update stock level after placing an order
+DELIMITER $$
+
+CREATE TRIGGER check_inventory_before_update
+BEFORE UPDATE ON Products
+FOR EACH ROW
+BEGIN
+    IF NEW.stock < 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Stock cannot be less than zero.';
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- Create trigger to prevent ordering out-of-stock items
+DELIMITER //
+
+CREATE TRIGGER before_places_insert
+BEFORE INSERT ON PLACES
+FOR EACH ROW
+BEGIN
+    DECLARE current_stock INT;
+    
+    -- Get the current stock of the product being ordered
+    SELECT stock INTO current_stock
+    FROM Products
+    WHERE product_id = NEW.product_id;
+    
+    -- Check if the ordered quantity exceeds the current stock
+    IF NEW.quantity > current_stock THEN
+        -- Raise an error and prevent the insertion
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'tries to ordermore than available stock';
+    END IF;
+END//
+
+DELIMITER ;
+
+-- -----------------
+DELIMITER //
+
+CREATE TABLE IF NOT EXISTS messages (
+    message_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT,
+    message_text VARCHAR(255),
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES customer(user_id)
+);
+
+DELIMITER $$
+
+CREATE TRIGGER after_customer_creation
+AFTER INSERT ON customer
+FOR EACH ROW
+BEGIN
+    INSERT INTO messages (user_id, message_text)
+    VALUES (NEW.user_id, CONCAT('Welcome ', NEW.first_name, ' ', NEW.last_name, '! Thank you for creating an account with us.'));
+END$$
+
+DELIMITER ;
+
+
+-- ---
+-- Create a trigger to prevent negative quantity in PLACES table
+DELIMITER //
+
+CREATE TRIGGER before_places_insert_update
+BEFORE INSERT  ON PLACES
+FOR EACH ROW
+BEGIN
+    IF NEW.quantity < 0 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Quantity cannot be negative';
+    END IF;
+END //
+
+DELIMITER ;
+
+-- --
+-- Create a trigger to allow negative total_amount in payment table
+DELIMITER //
+
+CREATE TRIGGER before_payment_insert_update
+BEFORE INSERT ON payment
+FOR EACH ROW
+BEGIN
+    IF NEW.total_amount < 0 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Total amount cannot be negative';
+    END IF;
+END //
+
+DELIMITER ;
+
+insert into places(order_id,quantity,product_id) values
+(2,-4,4);
